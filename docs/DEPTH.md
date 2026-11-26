@@ -10,7 +10,7 @@ AI/ML / 传统ML · 集装箱靠港时长预测、候泊超时与靠泊调配
 | M2 | 潮汐切片 | 按最近发布潮位作半开安全窗，端点净余水深、维修与船长限值共同筛除 | `src/berthwise/tide_slices/clearance.py` `src/berthwise/tide_slices/contracts.py` `src/berthwise/tide_slices/service.py` | `tests/test_tide_slices.py` |
 | M3 | 滞港估计 | 冻结历史 MAD 尺度，按航线与作业负载加权近邻估算占泊上下界 | `src/berthwise/dwell_estimator/neighbors.py` `src/berthwise/dwell_estimator/contracts.py` `src/berthwise/dwell_estimator/service.py` | `tests/test_dwell_estimator.py` |
 | M4 | 候泊风险 | 带惩罚二分类拟合靠泊超时，留出折做平滑分桶校准并拦截异常工况 | `src/berthwise/queue_pressure/hazard.py` `src/berthwise/queue_pressure/contracts.py` `src/berthwise/queue_pressure/service.py` | `tests/test_queue_pressure.py` |
-| M5 | 靠泊调配 | 按冷藏、紧急与承诺窗口分派，潮位净余排序并维护逐泊位不可重叠预留 | `src/berthwise/berth_assignment/planner.py` `src/berthwise/berth_assignment/contracts.py` `src/berthwise/berth_assignment/service.py` | `tests/test_berth_assignment.py` |
+| M5 | 靠泊调配 | 按冷藏、紧急与承诺窗口分派，潮位净余排序并维护逐泊位不可重叠预留；签出承诺离泊并保留已发承诺至原离泊分钟 | `src/berthwise/berth_assignment/planner.py` `src/berthwise/berth_assignment/commitment.py` `src/berthwise/berth_assignment/contracts.py` `src/berthwise/berth_assignment/service.py` | `tests/test_berth_assignment.py` `tests/test_departure_commitment.py` |
 | M6 | 滞港复核 | 独立复核泊位占用冲突和净水深，量化等泊分钟及冷藏箱保障支出 | `src/berthwise/turnaround_review/recheck.py` `src/berthwise/turnaround_review/contracts.py` `src/berthwise/turnaround_review/service.py` | `tests/test_turnaround_review.py` |
 
 ## 边界案例
@@ -27,3 +27,7 @@ AI/ML / 传统ML · 集装箱靠港时长预测、候泊超时与靠泊调配
 | TRAP-44 | 极端吃水和箱量工况 | 直接接收近邻分位数 | 距离拒绝自动放行 | `src/berthwise/dwell_estimator/neighbors.py` | `tests/test_dwell_estimator.py::test_stable_neighbors_and_calibrated_bounds` |
 | TRAP-53 | 批次追加异常大船 | 批归一改变其他位置 | 推断尺度只读取拟合结果 | `src/berthwise/dwell_estimator/neighbors.py` | `tests/test_dwell_estimator.py::test_prediction_is_batch_invariant` |
 | TRAP-54 | 预报或计划粒度变化 | 复用陈旧复核 | 配置与输入内容共同签名 | `src/berthwise/turnaround_review/recheck.py` | `tests/test_turnaround_review.py::test_deterministic_fingerprint_and_upstream_key` |
+| TRAP-57 | 航线回测样本不足 | 小样本收紧漏晚离泊 | 覆盖不足回退全港口径 | `src/berthwise/berth_assignment/commitment.py` | `tests/test_departure_commitment.py::test_small_sample_route_falls_back_to_port_caliber` |
+| TRAP-58 | 开班后结案混入校准 | 未来信息抬高口径 | 严格按开班前结案回测 | `src/berthwise/berth_assignment/commitment.py` | `tests/test_departure_commitment.py::test_closures_after_shift_start_never_flow_back` |
+| TRAP-59 | 重排覆盖已发承诺 | 承诺被后续船挤占 | 已发承诺保留至原离泊分钟 | `src/berthwise/berth_assignment/commitment.py` | `tests/test_departure_commitment.py::test_issued_commitment_kept_until_original_departure` |
+| TRAP-60 | 同班重跑承诺漂移 | 重跑结果不一致 | 相同输入承诺与档期指纹一致 | `src/berthwise/berth_assignment/commitment.py` | `tests/test_departure_commitment.py::test_same_shift_rerun_keeps_commitments_and_schedule` |

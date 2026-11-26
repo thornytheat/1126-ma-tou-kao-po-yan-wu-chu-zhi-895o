@@ -19,9 +19,13 @@ def first_vacancy(opening,reserved,eta,duration,spacing=15):
         return cursor,cursor+need
     return None
 
-def book(calls, coverage, reserved=None):
+def book(calls, coverage, reserved=None, stretch=None):
     if coverage < 1 or coverage > 100:
         raise ValueError("每日排靠配额须在 1 至 100")
+    if stretch is not None:
+        for key,value in stretch.items():
+            if type(value) is not int or not 0<=value<=4000:
+                raise ValueError("承诺宽放分钟越界")
     positions={key:list(value) for key,value in (reserved or {}).items()}
     active=list(calls)
     if len({item.call for item in active})!=len(active):
@@ -50,7 +54,7 @@ def book(calls, coverage, reserved=None):
         if wait>call.max_wait:
             outcomes.append(held(call,"协调改港","安全时段晚于承诺上限"))
             continue
-        positions.setdefault(berth,[]).append((start,stop))
+        positions.setdefault(berth,[]).append((start,stop+(stretch.get(call.call,0) if stretch else 0)))
         outcomes.append(Booking(call.call,berth,start,stop,wait,"安排靠泊","潮位和岸桥满足占泊上界",cranes,-neg))
         used+=1
     return tuple(outcomes)

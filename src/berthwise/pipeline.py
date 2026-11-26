@@ -11,6 +11,8 @@ from .tide_slices.service import plan_from_hydro, summarize_windows
 from .dwell_estimator.service import learn, estimate_all, duration_evidence
 from .queue_pressure.service import train_pressure, flag_queue
 from .berth_assignment.service import requests, book, committed_blocks
+from .berth_assignment.commitment import (calibrate, locked_blocks, sign_out,
+                                          commitment_digest, calibration_records, issued_records)
 from .turnaround_review.service import finalize, check_records, outcome_groups
 
 SAMPLE = Path(__file__).resolve().parents[2] / "sample_data"
@@ -40,31 +42,42 @@ def run(capacity: int | None=None) -> dict:
     pressure=train_pressure(queue_labels,controls["training_cutoff"],moment)
     risks=flag_queue(pressure,fleet,estimated,windows,moment,controls["yard"])
     applications=requests(fleet,estimated,risks,windows)
-    assignments=book(applications,cap)
+    calibration=calibrate(past,moment)
+    issued=load("issued_commitments.json")
+    locked=locked_blocks(issued,moment)
+    lines={ship.call:ship.line for ship in fleet}
+    stretch={item.call:calibration.buffer_for(lines[item.call]).buffer for item in applications}
+    assignments=book(applications,cap,locked,stretch)
+    commitments=sign_out(assignments,lines,calibration)
+    digest=commitment_digest(commitments,locked,calibration)
     audit,bills=finalize(assignments,windows,fleet,controls)
-    downtime=try_exceptions(applications,assignments,load("quay_incidents.json"),controls["reefer_fee"])
+    downtime=try_exceptions(applications,assignments,load("quay_incidents.json"),controls["reefer_fee"],stretch,locked)
     transfer=audit_actual(assignments,load("signed_outturn_logs.json"),controls["horizon"]+120)
     linked={ship.call:ship for ship in fleet}
     groups=outcome_groups(assignments)
+    promised={item.call:item.promised for item in commitments}
     rows=[]
     for booking in assignments:
         ship=linked[booking.call]
         line=asdict(booking)
         line.update(route=ship.line, boxes=ship.boxes, reefers=ship.perishable,
                     high=estimated[booking.call].high,risk=risks[booking.call]["risk"],
+                    promised=promised.get(booking.call),
                     reason=booking.reason+" · "+risks[booking.call]["reason"])
         rows.append(line)
     series=[{"label":"接收申报","value":len(inbox.events)},
             {"label":"正式航次","value":len(fleet)},
             {"label":"有潮窗","value":sum(bool(parts) for parts in windows.values())},
             {"label":"可自动评估","value":sum(not app.manual for app in applications)},
-            {"label":"已排靠泊","value":sum(bool(x.berth) for x in assignments)}]
+            {"label":"已排靠泊","value":sum(bool(x.berth) for x in assignments)},
+            {"label":"签出承诺","value":len(commitments)}]
     return {
         "metrics":{"开放航次":len(fleet),"已排靠泊":groups.get("安排靠泊",0),
+                   "已签出承诺":len(commitments),
                    "待处理航次":audit.waiting,"等泊总分钟":audit.wait_minutes},
         "columns":{"call":"航次","route":"航线","boxes":"箱量","reefers":"冷藏箱",
                    "high":"占泊上界分","risk":"候泊概率","berth":"泊位","moor":"靠泊分钟",
-                   "wait":"候泊分钟","state":"处置","reason":"证据"},
+                   "promised":"承诺离泊分","wait":"候泊分钟","state":"处置","reason":"证据"},
         "rows":rows,
         "series":series,
         "stages":[
@@ -76,8 +89,15 @@ def run(capacity: int | None=None) -> dict:
              "records":duration_evidence(estimated,model)+prior_error},
             {"title":"候泊风险","summary":f"使用 {pressure.rows} 条早期结案拟合和后续结案校准",
              "records":list(risks.values())+queue_accuracy},
-            {"title":"靠泊调配","summary":f"本截面配额 {cap}，泊位已登记 {len(committed_blocks(assignments))} 个",
-             "records":[asdict(row) for row in assignments]+downtime},
+            {"title":"靠泊调配","summary":f"本截面配额 {cap}，签出承诺 {len(commitments)} 份，泊位已登记 {len(committed_blocks(assignments))} 个",
+             "records":[asdict(row) for row in assignments]
+                       +[asdict(item) for item in commitments]
+                       +calibration_records(calibration)
+                       +issued_records(issued,moment)
+                       +[{"commitment_digest":digest,"signed":len(commitments),
+                          "port_buffer":calibration.port_buffer,"cutoff":calibration.cutoff,
+                          "backtest_points":calibration.points}]
+                       +downtime},
             {"title":"滞港复核","summary":"安全窗与泊位占用检查通过" if audit.cleared else "发现靠泊安全冲突",
              "records":check_records(audit,bills)+transfer},
         ],
